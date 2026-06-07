@@ -41,7 +41,8 @@ let lampState = {
   color: 0,             // 0 = Relay1(Warna1), 1 = Relay2(Warna2), 2 = Both
   lastUpdate: null,     // ISO timestamp update terakhir
   espConnected: false,  // true jika ESP32 polling dalam 10 detik terakhir
-  lastEspPing: null     // Timestamp polling terakhir ESP32
+  lastEspPing: null,    // Timestamp polling terakhir ESP32
+  schedule: null        // { on_time: '18:00', off_time: '06:00', timezone_offset: -420, last_trigger_id: null }
 };
 
 // ==================== API KEY MIDDLEWARE ====================
@@ -75,6 +76,44 @@ function checkEspConnection() {
   }
 }
 
+function checkSchedule() {
+  if (lampState.schedule) {
+    const d = new Date();
+    // Offset dalam menit (misal: WIB = -420)
+    // Waktu lokal = UTC - Offset
+    const localTime = new Date(d.getTime() - (lampState.schedule.timezone_offset * 60000));
+    
+    const hh = String(localTime.getUTCHours()).padStart(2, '0');
+    const mm = String(localTime.getUTCMinutes()).padStart(2, '0');
+    const currentTimeStr = `${hh}:${mm}`;
+    
+    // Mencegah trigger berulang pada menit yang sama
+    const currentDateStr = `${localTime.getUTCFullYear()}-${localTime.getUTCMonth()}-${localTime.getUTCDate()}`;
+    const triggerId = `${currentDateStr}_${currentTimeStr}`;
+    
+    if (lampState.schedule.last_trigger_id !== triggerId) {
+      const timestamp = new Date().toISOString();
+      let triggered = false;
+
+      if (lampState.schedule.on_time === currentTimeStr && !lampState.power) {
+        lampState.power = true;
+        lampState.lastUpdate = timestamp;
+        console.log(`[SCHEDULE] ⏰ Executed: Auto-ON at ${currentTimeStr}`);
+        triggered = true;
+      } else if (lampState.schedule.off_time === currentTimeStr && lampState.power) {
+        lampState.power = false;
+        lampState.lastUpdate = timestamp;
+        console.log(`[SCHEDULE] ⏰ Executed: Auto-OFF at ${currentTimeStr}`);
+        triggered = true;
+      }
+
+      if (triggered) {
+        lampState.schedule.last_trigger_id = triggerId;
+      }
+    }
+  }
+}
+
 // Map colorMode ke label yang readable
 function getColorLabel(colorMode) {
   return COLOR_LABELS[colorMode] || 'Unknown';
@@ -83,13 +122,15 @@ function getColorLabel(colorMode) {
 // Buat response data object (DRY — digunakan di GET dan POST)
 function buildResponseData() {
   checkEspConnection();
+  checkSchedule();
   return {
     power: lampState.power,
     color: lampState.color,
     colorLabel: getColorLabel(lampState.color),
     lastUpdate: lampState.lastUpdate,
     espConnected: lampState.espConnected,
-    lastEspPing: lampState.lastEspPing
+    lastEspPing: lampState.lastEspPing,
+    schedule: lampState.schedule
   };
 }
 
@@ -199,7 +240,8 @@ app.get('/api/info', verifyApiKey, (req, res) => {
     description: 'Smart Light Controller — IoT Backend',
     endpoints: {
       status: 'GET /api/status',
-      control: 'POST /api/control { action: "toggle" | "color" }'
+      control: 'POST /api/control { action: "toggle" | "color" }',
+      set_schedule: 'POST /api/schedule { on_time: "18:00", off_time: "06:00", timezone_offset: -420 }'
     }
   });
 });
@@ -209,6 +251,42 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: `Route ${req.method} ${req.path} tidak ditemukan`
+  });
+});
+
+// ==================== SCHEDULE ENDPOINTS ====================
+// POST /api/schedule
+app.post('/api/schedule', (req, res) => {
+  const { on_time, off_time, timezone_offset } = req.body;
+
+  if (typeof timezone_offset !== 'number') {
+    return res.status(400).json({ success: false, error: 'timezone_offset diperlukan (number)' });
+  }
+
+  const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+  
+  if (on_time && !timeRegex.test(on_time)) return res.status(400).json({ success: false, error: 'Format on_time tidak valid (HH:MM)' });
+  if (off_time && !timeRegex.test(off_time)) return res.status(400).json({ success: false, error: 'Format off_time tidak valid (HH:MM)' });
+
+  if (!on_time && !off_time) {
+    lampState.schedule = null;
+    console.log(`[SCHEDULE] ⏰ Cancelled`);
+    return res.json({ success: true, message: 'Jadwal dibatalkan', data: buildResponseData() });
+  }
+
+  lampState.schedule = {
+    on_time: on_time || null,
+    off_time: off_time || null,
+    timezone_offset: timezone_offset,
+    last_trigger_id: null
+  };
+
+  console.log(`[SCHEDULE] ⏰ Set: ON=${on_time || '-'} | OFF=${off_time || '-'} (TZ Offset: ${timezone_offset}m)`);
+
+  res.json({
+    success: true,
+    message: 'Jadwal berhasil diatur',
+    data: buildResponseData()
   });
 });
 
