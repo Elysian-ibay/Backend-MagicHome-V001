@@ -1,0 +1,17 @@
+{
+  "name": "elysian-magic-home-backend",
+  "version": "0.0.1",
+  "description": "Backend API for Elysian Magic Home — Smart Light Controller",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["iot", "esp32", "smart-switch"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  }
+}
